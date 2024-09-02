@@ -6,6 +6,7 @@ from sqlalchemy import desc
 from werkzeug.exceptions import NotFound
 
 import services.dataset_service
+import logging
 from controllers.service_api import api
 from controllers.service_api.app.error import ProviderNotInitializeError
 from controllers.service_api.dataset.error import (
@@ -20,7 +21,7 @@ from extensions.ext_database import db
 from fields.document_fields import document_fields, document_status_fields
 from libs.login import current_user
 from models.dataset import Dataset, Document, DocumentSegment
-from services.dataset_service import DocumentService
+from services.dataset_service import DocumentService, DatasetService
 from services.file_service import FileService
 
 
@@ -330,6 +331,50 @@ class DocumentIndexingStatusApi(DatasetApiResource):
         data = {"data": documents_status}
         return data
 
+class DocumentMoveApi(DatasetApiResource):
+    """Resource for move documents."""
+
+    @cloud_edition_billing_resource_check("vector_space", "dataset")
+    def post(self, tenant_id, dataset_id, document_id):
+        """Update document by text."""
+        parser = reqparse.RequestParser()
+        parser.add_argument("new_dataset_id", type=str, required=False, nullable=True, location="json")
+        # parser.add_argument("process_rule", type=dict, required=False, nullable=True, location="json")
+
+        args = parser.parse_args()
+        new_dataset_id = args.get('new_dataset_id')
+        logging.info(f"-----------{new_dataset_id}")
+        dataset_id = str(dataset_id)
+        tenant_id = str(tenant_id)
+        new_dataset_id = str(new_dataset_id)
+        logging.info(f"-----------tenant_id:{tenant_id}, dataset_id:{dataset_id}, tenant_id:{tenant_id}, new_dataset_id:{new_dataset_id}")
+
+        dataset = db.session.query(Dataset).filter(Dataset.tenant_id == tenant_id, Dataset.id == dataset_id).first()
+        if not dataset:
+            raise ValueError("Dataset is not exist.")
+
+        new_dataset = DatasetService.get_dataset(new_dataset_id)
+        if not new_dataset:
+            raise ValueError("Move to Dataset is not exist.")
+
+        document = DocumentService.get_document_by_id(document_id)
+        if not document:
+            raise ValueError("Document is not exist.")
+
+
+        document_update_params = {DocumentSegment.dataset_id: new_dataset_id}
+        Document.query.filter_by(id=document_id).update(document_update_params)
+        db.session.commit()
+
+
+        segment_update_params = {DocumentSegment.dataset_id: new_dataset_id}
+        DocumentSegment.query.filter_by(document_id=document.id).update(segment_update_params)
+        db.session.commit()
+
+
+        response = {"success": True}
+        return response, 200
+
 
 api.add_resource(DocumentAddByTextApi, "/datasets/<uuid:dataset_id>/document/create_by_text")
 api.add_resource(DocumentAddByFileApi, "/datasets/<uuid:dataset_id>/document/create_by_file")
@@ -338,3 +383,4 @@ api.add_resource(DocumentUpdateByFileApi, "/datasets/<uuid:dataset_id>/documents
 api.add_resource(DocumentDeleteApi, "/datasets/<uuid:dataset_id>/documents/<uuid:document_id>")
 api.add_resource(DocumentListApi, "/datasets/<uuid:dataset_id>/documents")
 api.add_resource(DocumentIndexingStatusApi, "/datasets/<uuid:dataset_id>/documents/<string:batch>/indexing-status")
+api.add_resource(DocumentMoveApi, "/datasets/<uuid:dataset_id>/documents/<uuid:document_id>/move")
